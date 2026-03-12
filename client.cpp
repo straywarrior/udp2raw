@@ -629,11 +629,11 @@ void async_cb(struct ev_loop *loop, struct ev_async *watcher, int revents) {
     }
 }
 
+#endif
 static int fec_send_cb_conn(void *ctx, char *data, int len) {
     conn_info_t *c = (conn_info_t *)ctx;
     return send_safer(*c, 'f', data, len);
 }
-#endif
 void clear_timer_cb(struct ev_loop *loop, struct ev_timer *watcher, int revents) {
     conn_info_t &conn_info = *((conn_info_t *)watcher->data);
     client_on_timer(conn_info);
