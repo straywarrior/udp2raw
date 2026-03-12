@@ -22,6 +22,11 @@ set(SOURCE_FILES
         fd_manager.cpp
         client.cpp
         server.cpp
+        fec/fec_manager.cpp
+        fec/delay_manager.cpp
+        fec/fec_adapter.cpp
+        fec/lib/rs.cpp
+        fec/lib/fec.cpp
         lib/aes_faster_c/aes.cpp
         lib/aes_faster_c/wrapper.cpp
         my_ev.cpp

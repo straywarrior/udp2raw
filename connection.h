@@ -15,6 +15,7 @@ extern int disable_anti_replay;
 #include "log.h"
 #include "network.h"
 #include "misc.h"
+#include "fec/fec_adapter.h"
 
 const int disable_conv_clear = 0;  // a udp connection in the multiplexer is called conversation in this program,conv for short.
 
@@ -235,6 +236,7 @@ struct conn_info_t  // stores info for a raw connection.for client ,there is onl
     my_id_t oppsite_const_id;
 
     blob_t *blob;
+    fec_context_t *fec_ctx;
 
     uint8_t my_roller;
     uint8_t oppsite_roller;

@@ -11,6 +11,7 @@
 #include "common.h"
 #include "log.h"
 #include "network.h"
+#include "fec/fec_adapter.h"
 
 extern int hb_mode;
 extern int hb_len;
@@ -132,6 +133,8 @@ extern int socket_buf_size;
 
 extern pthread_t keep_thread;
 extern int keep_thread_running;
+
+extern char fec_rs_par_str[rs_str_len];
 
 int process_lower_level_arg();
 void print_help();

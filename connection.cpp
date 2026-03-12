@@ -96,6 +96,7 @@ void conn_info_t::re_init() {
 }
 conn_info_t::conn_info_t() {
     blob = 0;
+    fec_ctx = 0;
     re_init();
 }
 void conn_info_t::prepare() {
@@ -105,6 +106,11 @@ void conn_info_t::prepare() {
         blob->conv_manager.s.additional_clear_function = server_clear_function;
     } else {
         assert(program_mode == client_mode);
+    }
+    if (g_fec_config.enable) {
+        fec_ctx = new fec_context_t;
+        fec_ctx->config = g_fec_config;
+        fec_ctx->delay_manager.set_capacity(g_fec_config.delay_capacity);
     }
 }
 
@@ -134,6 +140,10 @@ conn_info_t::~conn_info_t() {
     // conn_manager.const_id_mp.erase(oppsite_const_id);
     if (blob != 0)
         delete blob;
+    if (fec_ctx != 0) {
+        fec_destroy_context(*fec_ctx);
+        delete fec_ctx;
+    }
 
     // send_packet_info.protocol=g_packet_info_send.protocol;
 }
@@ -395,8 +405,8 @@ int send_safer(conn_info_t &conn_info, char type, const char *data, int len)  //
     packet_info_t &send_info = conn_info.raw_info.send_info;
     packet_info_t &recv_info = conn_info.raw_info.recv_info;
 
-    if (type != 'h' && type != 'd') {
-        mylog(log_warn, "first byte is not h or d  ,%x\n", type);
+    if (type != 'h' && type != 'd' && type != 'f') {
+        mylog(log_warn, "first byte is not h or d or f ,%x\n", type);
         return -1;
     }
 
@@ -458,7 +468,25 @@ int send_data_safer(conn_info_t &conn_info, const char *data, int len, u32_t con
 
     memcpy(send_data_buf + sizeof(n_conv_num), data, len);
     int new_len = len + sizeof(n_conv_num);
-    send_safer(conn_info, 'd', send_data_buf, new_len);
+    if (g_fec_config.enable && !g_fec_config.disable_fec && conn_info.fec_ctx != 0) {
+        if (conn_info.fec_ctx->send_cb == 0) {
+            conn_info.fec_ctx->send_cb = [](void *ctx, char *buf, int buf_len) -> int {
+                conn_info_t *c = (conn_info_t *)ctx;
+                return send_safer(*c, 'f', buf, buf_len);
+            };
+            conn_info.fec_ctx->send_ctx = &conn_info;
+        }
+
+        int out_n = 0;
+        char **out_arr = 0;
+        int *out_len = 0;
+        my_time_t *out_delay = 0;
+
+        fec_encode_input(*conn_info.fec_ctx, send_data_buf, new_len, out_n, out_arr, out_len, out_delay);
+        fec_send_outputs(*conn_info.fec_ctx, out_n, out_arr, out_len, out_delay);
+    } else {
+        send_safer(conn_info, 'd', send_data_buf, new_len);
+    }
     return 0;
 }
 int reserved_parse_safer(conn_info_t &conn_info, const char *input, int input_len, char &type, char *&data, int &len)  // subfunction for recv_safer,allow overlap
@@ -501,8 +529,8 @@ int reserved_parse_safer(conn_info_t &conn_info, const char *input, int input_le
     data = recv_data_buf + sizeof(anti_replay_seq_t) + sizeof(my_id_t) * 2;
     len = input_len - (sizeof(anti_replay_seq_t) + sizeof(my_id_t) * 2);
 
-    if (data[0] != 'h' && data[0] != 'd') {
-        mylog(log_debug, "first byte is not h or d  ,%x\n", data[0]);
+    if (data[0] != 'h' && data[0] != 'd' && data[0] != 'f') {
+        mylog(log_debug, "first byte is not h or d or f ,%x\n", data[0]);
         return -1;
     }
 

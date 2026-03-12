@@ -389,6 +389,7 @@ void init_random_number_fd();
 u64_t get_true_random_number_64();
 u32_t get_true_random_number();
 u32_t get_true_random_number_nz();
+u64_t get_current_time_us();
 u64_t ntoh64(u64_t a);
 u64_t hton64(u64_t a);
 

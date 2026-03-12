@@ -309,6 +309,31 @@ int client_on_timer(conn_info_t &conn_info)  // for client. called when a timer 
     }
     return 0;
 }
+static int client_handle_data_payload(conn_info_t &conn_info, char *data, int data_len) {
+    if (data_len < int(sizeof(u32_t))) {
+        mylog(log_warn, "data_len too small for conv id\n");
+        return -1;
+    }
+
+    u32_t tmp_conv_id;
+    memcpy(&tmp_conv_id, &data[0], sizeof(tmp_conv_id));
+    tmp_conv_id = ntohl(tmp_conv_id);
+
+    if (!conn_info.blob->conv_manager.c.is_conv_used(tmp_conv_id)) {
+        mylog(log_info, "unknow conv %d,ignore\n", tmp_conv_id);
+        return 0;
+    }
+
+    conn_info.blob->conv_manager.c.update_active_time(tmp_conv_id);
+    address_t tmp_addr = conn_info.blob->conv_manager.c.find_data_by_conv(tmp_conv_id);
+
+    int ret = sendto(udp_fd, data + sizeof(u32_t), data_len - (sizeof(u32_t)), 0, (struct sockaddr *)&tmp_addr.inner, tmp_addr.get_len());
+    if (ret < 0) {
+        mylog(log_warn, "sento returned %d,%s,%02x,%s\n", ret, get_sock_error(), int(tmp_addr.get_type()), tmp_addr.get_str());
+    }
+    return 0;
+}
+
 int client_on_raw_recv_hs2_or_ready(conn_info_t &conn_info, char type, char *data, int data_len) {
     packet_info_t &send_info = conn_info.raw_info.send_info;
     packet_info_t &recv_info = conn_info.raw_info.recv_info;
@@ -330,39 +355,33 @@ int client_on_raw_recv_hs2_or_ready(conn_info_t &conn_info, char type, char *dat
         mylog(log_debug, "[hb]heart beat received,oppsite_roller=%d\n", int(conn_info.oppsite_roller));
         conn_info.last_hb_recv_time = get_current_time();
         return 0;
-    } else if (data_len >= int(sizeof(u32_t)) && type == 'd') {
+    } else if (type == 'd') {
         mylog(log_trace, "received a data from fake tcp,len:%d\n", data_len);
 
         if (hb_mode == 0)
             conn_info.last_hb_recv_time = get_current_time();
 
-        u32_t tmp_conv_id;
-        memcpy(&tmp_conv_id, &data[0], sizeof(tmp_conv_id));
-        tmp_conv_id = ntohl(tmp_conv_id);
+        return client_handle_data_payload(conn_info, data, data_len);
+    } else if (type == 'f') {
+        mylog(log_trace, "received a fec data from fake tcp,len:%d\n", data_len);
 
-        if (!conn_info.blob->conv_manager.c.is_conv_used(tmp_conv_id)) {
-            mylog(log_info, "unknow conv %d,ignore\n", tmp_conv_id);
-            return 0;
+        if (hb_mode == 0)
+            conn_info.last_hb_recv_time = get_current_time();
+
+        if (!g_fec_config.enable || g_fec_config.disable_fec || conn_info.fec_ctx == 0) {
+            mylog(log_warn, "fec packet received but fec is disabled\n");
+            return -1;
         }
 
-        conn_info.blob->conv_manager.c.update_active_time(tmp_conv_id);
-
-        // u64_t u64=conn_info.blob->conv_manager.c.find_data_by_conv(tmp_conv_id);
-        address_t tmp_addr = conn_info.blob->conv_manager.c.find_data_by_conv(tmp_conv_id);
-
-        // sockaddr_in tmp_sockaddr={0};
-
-        // tmp_sockaddr.sin_family = AF_INET;
-        // tmp_sockaddr.sin_addr.s_addr=(u64>>32u);
-
-        // tmp_sockaddr.sin_port= htons(uint16_t((u64<<32u)>>32u));
-
-        int ret = sendto(udp_fd, data + sizeof(u32_t), data_len - (sizeof(u32_t)), 0, (struct sockaddr *)&tmp_addr.inner, tmp_addr.get_len());
-
-        if (ret < 0) {
-            mylog(log_warn, "sento returned %d,%s,%02x,%s\n", ret, get_sock_error(), int(tmp_addr.get_type()), tmp_addr.get_str());
-            // perror("ret<0");
+        int out_n = 0;
+        char **out_arr = 0;
+        int *out_len = 0;
+        my_time_t *out_delay = 0;
+        fec_decode_input(*conn_info.fec_ctx, data, data_len, out_n, out_arr, out_len, out_delay);
+        for (int i = 0; i < out_n; i++) {
+            client_handle_data_payload(conn_info, out_arr[i], out_len[i]);
         }
+        return 0;
     } else {
         mylog(log_warn, "unknown packet,this shouldnt happen.\n");
         return -1;
@@ -609,6 +628,11 @@ void async_cb(struct ev_loop *loop, struct ev_async *watcher, int revents) {
         client_on_raw_recv(conn_info);
     }
 }
+
+static int fec_send_cb_conn(void *ctx, char *data, int len) {
+    conn_info_t *c = (conn_info_t *)ctx;
+    return send_safer(*c, 'f', data, len);
+}
 #endif
 void clear_timer_cb(struct ev_loop *loop, struct ev_timer *watcher, int revents) {
     conn_info_t &conn_info = *((conn_info_t *)watcher->data);
@@ -825,6 +849,10 @@ int client_event_loop() {
     // }
 
     struct ev_loop *loop = ev_default_loop(0);
+
+    if (g_fec_config.enable && conn_info.fec_ctx != 0) {
+        fec_init_context(*conn_info.fec_ctx, loop, fec_send_cb_conn, &conn_info);
+    }
     assert(loop != NULL);
 
     // ev.events = EPOLLIN;

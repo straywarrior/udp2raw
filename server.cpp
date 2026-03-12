@@ -67,6 +67,67 @@ int server_on_timer_multi(conn_info_t &conn_info)  // for server. called when a 
     }
     return 0;
 }
+static int server_handle_data_payload(conn_info_t &conn_info, char *ip_port, char *data, int data_len) {
+    if (data_len < int(sizeof(u32_t))) return -1;
+
+    my_id_t tmp_conv_id;
+    memcpy(&tmp_conv_id, &data[0], sizeof(tmp_conv_id));
+    tmp_conv_id = ntohl(tmp_conv_id);
+
+    if (hb_mode == 0)
+        conn_info.last_hb_recv_time = get_current_time();
+
+    mylog(log_trace, "conv:%u\n", tmp_conv_id);
+    if (!conn_info.blob->conv_manager.s.is_conv_used(tmp_conv_id)) {
+        if (conn_info.blob->conv_manager.s.get_size() >= max_conv_num) {
+            mylog(log_warn,
+                  "[%s]ignored new conv %x connect bc max_conv_num exceed\n", ip_port,
+                  tmp_conv_id);
+            return 0;
+        }
+
+        int new_udp_fd = remote_addr.new_connected_udp_fd();
+        if (new_udp_fd < 0) {
+            mylog(log_warn, "[%s]new_connected_udp_fd() failed\n", ip_port);
+            return -1;
+        }
+
+        struct epoll_event ev;
+
+        fd64_t new_udp_fd64 = fd_manager.create(new_udp_fd);
+        fd_manager.get_info(new_udp_fd64).p_conn_info = &conn_info;
+
+        mylog(log_trace, "[%s]u64: %lld\n", ip_port, new_udp_fd64);
+        ev.events = EPOLLIN;
+        ev.data.u64 = new_udp_fd64;
+
+        int ret = epoll_ctl(epollfd, EPOLL_CTL_ADD, new_udp_fd, &ev);
+        if (ret != 0) {
+            mylog(log_warn, "[%s]add udp_fd error\n", ip_port);
+            close(new_udp_fd);
+            return -1;
+        }
+
+        conn_info.blob->conv_manager.s.insert_conv(tmp_conv_id, new_udp_fd64);
+        mylog(log_info, "[%s]new conv conv_id=%x, assigned fd=%d\n", ip_port,
+              tmp_conv_id, new_udp_fd);
+    }
+
+    fd64_t fd64 = conn_info.blob->conv_manager.s.find_data_by_conv(tmp_conv_id);
+    conn_info.blob->conv_manager.s.update_active_time(tmp_conv_id);
+
+    int fd = fd_manager.to_fd(fd64);
+    mylog(log_trace, "[%s]received a data from fake tcp,len:%d\n", ip_port, data_len);
+    int ret = send(fd, data + sizeof(u32_t),
+                   data_len - (sizeof(u32_t)), 0);
+
+    mylog(log_trace, "[%s]%d byte sent  ,fd :%d\n ", ip_port, ret, fd);
+    if (ret < 0) {
+        mylog(log_warn, "send returned %d\n", ret);
+    }
+    return 0;
+}
+
 int server_on_raw_recv_ready(conn_info_t &conn_info, char *ip_port, char type, char *data, int data_len)  // called while the state for a connection is server_ready
 // receives data and heart beat by recv_safer.
 {
@@ -89,104 +150,20 @@ int server_on_raw_recv_ready(conn_info_t &conn_info, char *ip_port, char type, c
         mylog(log_debug, "[%s][hb]received hb \n", ip_port);
         conn_info.last_hb_recv_time = get_current_time();
         return 0;
-    } else if (type == 'd' && data_len >= int(sizeof(u32_t))) {
-        // u32_t tmp_conv_id = ntohl(*((u32_t *) &data[0]));
-        my_id_t tmp_conv_id;
-        memcpy(&tmp_conv_id, &data[0], sizeof(tmp_conv_id));
-        tmp_conv_id = ntohl(tmp_conv_id);
-
-        if (hb_mode == 0)
-            conn_info.last_hb_recv_time = get_current_time();
-
-        mylog(log_trace, "conv:%u\n", tmp_conv_id);
-        if (!conn_info.blob->conv_manager.s.is_conv_used(tmp_conv_id)) {
-            if (conn_info.blob->conv_manager.s.get_size() >= max_conv_num) {
-                mylog(log_warn,
-                      "[%s]ignored new conv %x connect bc max_conv_num exceed\n", ip_port,
-                      tmp_conv_id);
-                return 0;
-            }
-
-            /*
-            struct sockaddr_in remote_addr_in={0};
-
-            socklen_t slen = sizeof(sockaddr_in);
-            //memset(&remote_addr_in, 0, sizeof(remote_addr_in));
-            remote_addr_in.sin_family = AF_INET;
-            remote_addr_in.sin_port = htons(remote_port);
-            remote_addr_in.sin_addr.s_addr = remote_ip_uint32;
-
-
-
-            int new_udp_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-
-
-            if (new_udp_fd < 0) {
-                    mylog(log_warn, "[%s]create udp_fd error\n",ip_port);
-                    return -1;
-            }
-            setnonblocking(new_udp_fd);
-            set_buf_size(new_udp_fd,socket_buf_size);
-
-            mylog(log_debug, "[%s]created new udp_fd %d\n",ip_port, new_udp_fd);
-            int ret = connect(new_udp_fd, (struct sockaddr *) &remote_addr_in,
-                            slen);
-            if (ret != 0) {
-                    mylog(log_warn, "udp fd connect fail\n");
-                    close(new_udp_fd);
-                    return -1;
-            }*/
-
-            int new_udp_fd = remote_addr.new_connected_udp_fd();
-            if (new_udp_fd < 0) {
-                mylog(log_warn, "[%s]new_connected_udp_fd() failed\n", ip_port);
-                return -1;
-            }
-
-            struct epoll_event ev;
-
-            fd64_t new_udp_fd64 = fd_manager.create(new_udp_fd);
-            fd_manager.get_info(new_udp_fd64).p_conn_info = &conn_info;
-
-            mylog(log_trace, "[%s]u64: %lld\n", ip_port, new_udp_fd64);
-            ev.events = EPOLLIN;
-
-            ev.data.u64 = new_udp_fd64;
-
-            int ret = epoll_ctl(epollfd, EPOLL_CTL_ADD, new_udp_fd, &ev);
-
-            if (ret != 0) {
-                mylog(log_warn, "[%s]add udp_fd error\n", ip_port);
-                close(new_udp_fd);
-                return -1;
-            }
-
-            conn_info.blob->conv_manager.s.insert_conv(tmp_conv_id, new_udp_fd64);
-
-            // assert(conn_manager.udp_fd_mp.find(new_udp_fd)==conn_manager.udp_fd_mp.end());
-
-            // conn_manager.udp_fd_mp[new_udp_fd] = &conn_info;
-
-            // pack_u64(conn_info.raw_info.recv_info.src_ip,conn_info.raw_info.recv_info.src_port);
-
-            mylog(log_info, "[%s]new conv conv_id=%x, assigned fd=%d\n", ip_port,
-                  tmp_conv_id, new_udp_fd);
+    } else if (type == 'd') {
+        return server_handle_data_payload(conn_info, ip_port, data, data_len);
+    } else if (type == 'f') {
+        if (!g_fec_config.enable || g_fec_config.disable_fec || conn_info.fec_ctx == 0) {
+            mylog(log_warn, "[%s]fec packet received but fec is disabled\n", ip_port);
+            return -1;
         }
-
-        fd64_t fd64 = conn_info.blob->conv_manager.s.find_data_by_conv(tmp_conv_id);
-
-        conn_info.blob->conv_manager.s.update_active_time(tmp_conv_id);
-
-        int fd = fd_manager.to_fd(fd64);
-
-        mylog(log_trace, "[%s]received a data from fake tcp,len:%d\n", ip_port, data_len);
-        int ret = send(fd, data + sizeof(u32_t),
-                       data_len - (sizeof(u32_t)), 0);
-
-        mylog(log_trace, "[%s]%d byte sent  ,fd :%d\n ", ip_port, ret, fd);
-        if (ret < 0) {
-            mylog(log_warn, "send returned %d\n", ret);
-            // perror("what happened????");
+        int out_n = 0;
+        char **out_arr = 0;
+        int *out_len = 0;
+        my_time_t *out_delay = 0;
+        fec_decode_input(*conn_info.fec_ctx, data, data_len, out_n, out_arr, out_len, out_delay);
+        for (int i = 0; i < out_n; i++) {
+            server_handle_data_payload(conn_info, ip_port, out_arr[i], out_len[i]);
         }
         return 0;
     }

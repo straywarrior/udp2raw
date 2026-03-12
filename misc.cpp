@@ -89,6 +89,20 @@ int about_to_exit = 0;
 int socket_buf_size = 1024 * 1024;
 // int force_socket_buf=0;
 
+static int parse_range_ms(const char *s, int &min_us, int &max_us) {
+    int a = -1, b = -1;
+    if (strchr(s, ':') != 0) {
+        if (sscanf(s, "%d:%d", &a, &b) != 2) return -1;
+    } else {
+        if (sscanf(s, "%d", &a) != 1) return -1;
+        b = a;
+    }
+    if (a < 0 || b < 0) return -1;
+    min_us = a * 1000;
+    max_us = b * 1000;
+    return 0;
+}
+
 // char lower_level_arg[1000];
 #ifdef UDP2RAW_LINUX
 int process_lower_level_arg()  // handle --lower-level option
@@ -191,6 +205,16 @@ void print_help() {
     printf("    --mtu-warn            <number>        mtu warning threshold, unit:byte, default:1375\n");
     printf("    --clear                               clear any iptables rules added by this program.overrides everything\n");
     printf("    --retry-on-error                      retry on error, allow to start udp2raw before network is initialized\n");
+    printf("    --fec                 x:y             enable fec, send y redundant packets for every x packets\n");
+    printf("    --fec-timeout         <number>        fec timeout, unit: ms\n");
+    printf("    --fec-mode            <number>        fec mode, 0 or 1\n");
+    printf("    --fec-mtu             <number>        fec mtu, unit: byte\n");
+    printf("    --fec-queue-len       <number>        fec queue len\n");
+    printf("    --fec-jitter          <number|min:max>  jitter in ms\n");
+    printf("    --fec-interval        <number|min:max>  scatter each fec group in ms\n");
+    printf("    --fec-report          <number>        report interval, unit: s\n");
+    printf("    --fec-disable                        disable fec\n");
+    printf("    --fec-allow-fallback                 allow fallback if peer doesnt enable fec\n");
     printf("    -h,--help                             print this help message\n");
     // printf("common options,these options must be same on both side\n");
 }
@@ -291,6 +315,16 @@ void process_arg(int argc, char *argv[])  // process all options
             {"dev", required_argument, 0, 1},
             {"dns-resolve", no_argument, 0, 1},
             {"easy-tcp", no_argument, 0, 1},
+            {"fec", required_argument, 0, 1},
+            {"fec-timeout", required_argument, 0, 1},
+            {"fec-mode", required_argument, 0, 1},
+            {"fec-mtu", required_argument, 0, 1},
+            {"fec-queue-len", required_argument, 0, 1},
+            {"fec-jitter", required_argument, 0, 1},
+            {"fec-interval", required_argument, 0, 1},
+            {"fec-report", required_argument, 0, 1},
+            {"fec-disable", no_argument, 0, 1},
+            {"fec-allow-fallback", no_argument, 0, 1},
 #ifdef UDP2RAW_MP
             {"pcap-send", no_argument, 0, 1},
             {"no-pcap-mutex", no_argument, 0, 1},
@@ -657,6 +691,69 @@ void process_arg(int argc, char *argv[])  // process all options
                     mylog(log_info, "ttl_value=%d\n", ttl_value);
                 }
 
+                else if (strcmp(long_options[option_index].name, "fec") == 0) {
+                    g_fec_config.enable = 1;
+                    snprintf(fec_rs_par_str, sizeof(fec_rs_par_str), "%s", optarg);
+                    if (g_fec_par.rs_from_str(fec_rs_par_str) != 0) {
+                        mylog(log_fatal, "invalid fec parameter %s\n", fec_rs_par_str);
+                        myexit(-1);
+                    }
+                    g_fec_par.version++;
+                } else if (strcmp(long_options[option_index].name, "fec-timeout") == 0) {
+                    int a = 0;
+                    sscanf(optarg, "%d", &a);
+                    if (a < 0 || a > 1000) {
+                        mylog(log_fatal, "invalid fec-timeout %d\n", a);
+                        myexit(-1);
+                    }
+                    g_fec_par.timeout = a * 1000;
+                    g_fec_par.version++;
+                } else if (strcmp(long_options[option_index].name, "fec-mode") == 0) {
+                    int a = 0;
+                    sscanf(optarg, "%d", &a);
+                    if (a != 0 && a != 1) {
+                        mylog(log_fatal, "invalid fec-mode %d\n", a);
+                        myexit(-1);
+                    }
+                    g_fec_par.mode = a;
+                    g_fec_par.version++;
+                } else if (strcmp(long_options[option_index].name, "fec-mtu") == 0) {
+                    int a = 0;
+                    sscanf(optarg, "%d", &a);
+                    if (a < 100 || a > 2000) {
+                        mylog(log_fatal, "invalid fec-mtu %d\n", a);
+                        myexit(-1);
+                    }
+                    g_fec_par.mtu = a;
+                    g_fec_par.version++;
+                } else if (strcmp(long_options[option_index].name, "fec-queue-len") == 0) {
+                    int a = 0;
+                    sscanf(optarg, "%d", &a);
+                    if (a < 1 || a > 10000) {
+                        mylog(log_fatal, "invalid fec-queue-len %d\n", a);
+                        myexit(-1);
+                    }
+                    g_fec_par.queue_len = a;
+                    g_fec_par.version++;
+                } else if (strcmp(long_options[option_index].name, "fec-jitter") == 0) {
+                    if (parse_range_ms(optarg, g_fec_config.jitter_min, g_fec_config.jitter_max) != 0) {
+                        mylog(log_fatal, "invalid fec-jitter %s\n", optarg);
+                        myexit(-1);
+                    }
+                } else if (strcmp(long_options[option_index].name, "fec-interval") == 0) {
+                    if (parse_range_ms(optarg, g_fec_config.interval_min, g_fec_config.interval_max) != 0) {
+                        mylog(log_fatal, "invalid fec-interval %s\n", optarg);
+                        myexit(-1);
+                    }
+                } else if (strcmp(long_options[option_index].name, "fec-report") == 0) {
+                    sscanf(optarg, "%d", &g_fec_config.report_interval);
+                    if (g_fec_config.report_interval < 0) g_fec_config.report_interval = 0;
+                } else if (strcmp(long_options[option_index].name, "fec-disable") == 0) {
+                    g_fec_config.disable_fec = 1;
+                } else if (strcmp(long_options[option_index].name, "fec-allow-fallback") == 0) {
+                    g_fec_config.allow_fallback = 1;
+                }
+
                 else if (strcmp(long_options[option_index].name, "dns-resolve") == 0)  // currently not used
                 {
                     enable_dns_resolve = 1;
@@ -701,6 +798,14 @@ void process_arg(int argc, char *argv[])  // process all options
         raw_ip_version = remote_addr.get_type();
     } else {
         raw_ip_version = local_addr.get_type();
+    }
+
+    if (g_fec_config.enable && g_fec_par.rs_cnt == 0) {
+        if (g_fec_par.rs_from_str(fec_rs_par_str) != 0) {
+            mylog(log_fatal, "invalid fec parameter %s\n", fec_rs_par_str);
+            myexit(-1);
+        }
+        g_fec_par.version++;
     }
 
     if (auto_add_iptables_rule && use_tcp_dummy_socket) {
