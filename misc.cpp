@@ -1155,12 +1155,19 @@ int set_timer_server(int epollfd, int &timer_fd, fd64_t &fd64)  // only for serv
     itimerspec its;
     memset(&its, 0, sizeof(its));
 
+    u32_t interval_ms = timer_interval;
+    if (g_fec_config.enable && !g_fec_config.disable_fec) {
+        u32_t fec_ms = (g_fec_par.timeout + 999) / 1000;  // timeout is in us
+        if (fec_ms < 1) fec_ms = 1;
+        if (fec_ms < interval_ms) interval_ms = fec_ms;
+    }
+
     if ((timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK)) < 0) {
         mylog(log_fatal, "timer_fd create error\n");
         myexit(1);
     }
-    its.it_interval.tv_sec = (timer_interval / 1000);
-    its.it_interval.tv_nsec = (timer_interval % 1000) * 1000ll * 1000ll;
+    its.it_interval.tv_sec = (interval_ms / 1000);
+    its.it_interval.tv_nsec = (interval_ms % 1000) * 1000ll * 1000ll;
     its.it_value.tv_nsec = 1;  // imidiately
     timerfd_settime(timer_fd, 0, &its, 0);
 
