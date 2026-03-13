@@ -16,6 +16,11 @@
 #include "encrypt.h"
 #include "fd_manager.h"
 
+static int fec_send_cb_conn(void *ctx, char *data, int len) {
+    conn_info_t *c = (conn_info_t *)ctx;
+    return send_safer(*c, 'f', data, len);
+}
+
 int server_on_timer_multi(conn_info_t &conn_info)  // for server. called when a timer is ready in epoll.for server,there will be one timer for every connection
 // there is also a global timer for server,but its not handled here
 {
@@ -31,6 +36,19 @@ int server_on_timer_multi(conn_info_t &conn_info)  // for server. called when a 
     // keep_iptables_rule();
     mylog(log_trace, "server timer!\n");
     raw_info_t &raw_info = conn_info.raw_info;
+
+    if (g_fec_config.enable && !g_fec_config.disable_fec && conn_info.fec_ctx != 0) {
+        if (conn_info.fec_ctx->send_cb == 0) {
+            conn_info.fec_ctx->send_cb = fec_send_cb_conn;
+            conn_info.fec_ctx->send_ctx = &conn_info;
+        }
+        int out_n = 0;
+        char **out_arr = 0;
+        int *out_len = 0;
+        my_time_t *out_delay = 0;
+        fec_encode_input(*conn_info.fec_ctx, 0, 0, out_n, out_arr, out_len, out_delay);
+        fec_send_outputs(*conn_info.fec_ctx, out_n, out_arr, out_len, out_delay);
+    }
 
     assert(conn_info.state.server_current_state == server_ready);
 

@@ -7,6 +7,8 @@
 #include "encrypt.h"
 #include "fd_manager.h"
 
+static int fec_send_cb_conn(void *ctx, char *data, int len);
+
 #ifdef UDP2RAW_MP
 u32_t detect_interval = 1500;
 u64_t laste_detect_time = 0;
@@ -21,6 +23,19 @@ extern int pcap_captured_full_len;
 
 int client_on_timer(conn_info_t &conn_info)  // for client. called when a timer is ready in epoll
 {
+    if (g_fec_config.enable && !g_fec_config.disable_fec && conn_info.fec_ctx != 0) {
+        if (conn_info.fec_ctx->send_cb == 0) {
+            conn_info.fec_ctx->send_cb = fec_send_cb_conn;
+            conn_info.fec_ctx->send_ctx = &conn_info;
+        }
+        int out_n = 0;
+        char **out_arr = 0;
+        int *out_len = 0;
+        my_time_t *out_delay = 0;
+        fec_encode_input(*conn_info.fec_ctx, 0, 0, out_n, out_arr, out_len, out_delay);
+        fec_send_outputs(*conn_info.fec_ctx, out_n, out_arr, out_len, out_delay);
+    }
+
     packet_info_t &send_info = conn_info.raw_info.send_info;
     packet_info_t &recv_info = conn_info.raw_info.recv_info;
     raw_info_t &raw_info = conn_info.raw_info;
