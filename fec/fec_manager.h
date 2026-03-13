@@ -364,6 +364,10 @@ class fec_encode_manager_t : not_copy_able_t {
     int get_type() {
         return fec_par.mode;
     }
+
+    int has_pending() const {
+        return counter > 0;
+    }
     // u64_t get_timer_fd64();
     int reset_fec_parameter(int data_num, int redundant_num, int mtu, int pending_num, int pending_time, int type);
     int input(char *s, int len /*,int &is_first_packet*/);

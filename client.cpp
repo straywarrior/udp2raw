@@ -28,12 +28,14 @@ int client_on_timer(conn_info_t &conn_info)  // for client. called when a timer 
             conn_info.fec_ctx->send_cb = fec_send_cb_conn;
             conn_info.fec_ctx->send_ctx = &conn_info;
         }
-        int out_n = 0;
-        char **out_arr = 0;
-        int *out_len = 0;
-        my_time_t *out_delay = 0;
-        fec_encode_input(*conn_info.fec_ctx, 0, 0, out_n, out_arr, out_len, out_delay);
-        fec_send_outputs(*conn_info.fec_ctx, out_n, out_arr, out_len, out_delay);
+        if (conn_info.fec_ctx->fec_encode.has_pending()) {
+            int out_n = 0;
+            char **out_arr = 0;
+            int *out_len = 0;
+            my_time_t *out_delay = 0;
+            fec_encode_input(*conn_info.fec_ctx, 0, 0, out_n, out_arr, out_len, out_delay);
+            fec_send_outputs(*conn_info.fec_ctx, out_n, out_arr, out_len, out_delay);
+        }
     }
 
     packet_info_t &send_info = conn_info.raw_info.send_info;

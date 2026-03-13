@@ -72,6 +72,11 @@ int fec_encode_input(fec_context_t &ctx, char *data, int len, int &out_n, char *
 
     fec_inner_stat_t &inner_stat = ctx.stat.normal_to_fec;
 
+    if (data == 0 && ctx.fec_encode.has_pending() == 0) {
+        out_n = 0;
+        return 0;
+    }
+
     if (ctx.config.disable_fec || ctx.config.enable == 0) {
         if (data == 0) {
             out_n = 0;
